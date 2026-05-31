@@ -120,20 +120,24 @@ class WebSocketConnectionManager:
             self.self_client_listeners[client_id].discard(who)
 
     def get_listeners(self, who: Optional[str] = None) -> Dict[str, Any]:
-        """获取监听状态"""
+        """获取监听状态（合并 WebSocket listener_map 和 HTTP callbacks 两个来源）"""
+        # 所有注册了回调的联系人（无论通过 WebSocket 还是 addlistenchat）
+        all_listening = set(self.callbacks.keys()) | {
+            w for w, clients in self.listener_map.items() if clients
+        }
         if who:
             return {
                 "who": who,
-                "is_listening": who in self.listener_map and len(self.listener_map[who]) > 0,
-                "listener_count": len(self.listener_map.get(who, set()))
+                "is_listening": who in all_listening,
+                "listener_count": len(self.listener_map.get(who, set())),
+                "has_callback": who in self.callbacks,
             }
         else:
             return {
-                "active_listeners": {
-                    who: len(clients) for who, clients in self.listener_map.items() if clients
-                },
-                "total_listeners": sum(len(clients) for clients in self.listener_map.values()),
-                "active_connections": len(self.active_connections)
+                "active_listeners": {w: len(self.listener_map.get(w, set())) for w in all_listening},
+                "listening_contacts": sorted(all_listening),
+                "total_listening": len(all_listening),
+                "active_ws_connections": len(self.active_connections),
             }
 
 
@@ -164,6 +168,11 @@ class ListenService:
             """处理接收到的消息"""
             try:
                 raw = msg.raw if hasattr(msg, 'raw') else {}
+
+                # 过滤自己发出的消息，只保留对方发来的
+                if raw.get('src') == 'self' or raw.get('attr') == 'self':
+                    return
+
                 message_data = {
                     "type": "message",
                     "data": {**raw, "listen_who": who, "received_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
