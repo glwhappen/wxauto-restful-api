@@ -621,7 +621,16 @@ class WeChatService:
         def _get_friends():
             wx = get_wechat(wxname)
             result = wx.GetNewFriends(acceptable=acceptable)
-            return APIResponse(success=True, message='', data=result)
+            # NewFriendElement 不可直接序列化，提取 .raw 或转为 dict
+            items = []
+            for r in (result or []):
+                if hasattr(r, 'raw'):
+                    items.append(r.raw)
+                elif hasattr(r, '__dict__'):
+                    items.append({k: v for k, v in vars(r).items() if not k.startswith('_')})
+                else:
+                    items.append(str(r))
+            return APIResponse(success=True, message='', data=items)
 
         return await self._queue.submit(_get_friends)
 
