@@ -233,6 +233,12 @@ class ListenService:
             if who in manager.callbacks:
                 return APIResponse(success=False, message=f"已经在监听 {who}")
 
+            # 确保微信处于聊天页面，避免无效窗口句柄错误
+            try:
+                wx.SwitchToChat()
+            except Exception:
+                pass
+
             # 创建并注册回调
             callback = self._create_message_callback(who)
             wx.AddListenChat(who, callback)

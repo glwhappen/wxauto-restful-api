@@ -436,18 +436,27 @@ class WeChatService:
             who: str,
             wxname: Optional[str] = None
     ) -> APIResponse:
-        """获取所有消息"""
+        """获取所有消息（优先使用子窗口，避免主窗口切换冲突）"""
         @handle_service_error(custom_message="获取消息失败")
         def _get_all():
             from app.utils.response_builder import message_data, error
 
             wx = get_wechat(wxname)
+
+            # 优先从子窗口读取，避免子窗口已打开时主窗口切换失败
+            subwin = get_wechat_subwin(wxname, who) if who else None
+            if subwin:
+                chat_info = subwin.ChatInfo()
+                msgs = subwin.GetAllMessage()
+                raw_msgs = [msg.raw for msg in msgs]
+                return message_data(messages=raw_msgs, chat_info=chat_info, message="")
+
+            # 没有子窗口则走主窗口
             if who:
                 if not safe_switch_chat(wx, target=who):
                     return error(message='找不到聊天窗口', error_code='CHAT_NOT_FOUND')
             msgs = wx.GetAllMessage()
             chat_info = wx.ChatInfo()
-            # raw_msgs = get_raw_messages(msgs, chat_info)
             raw_msgs = get_raw_messages(msgs, chat_info)
             return message_data(messages=raw_msgs, chat_info=chat_info, message="")
 
