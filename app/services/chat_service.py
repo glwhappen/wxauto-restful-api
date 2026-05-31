@@ -78,11 +78,11 @@ class ChatService:
         subwin = get_wechat_subwin(wxname, who)
         if subwin:
             result = subwin.ChatInfo()
-            result['msg'] = [msg.info for msg in subwin.GetAllMessage()]
+            result['msg'] = [msg.raw for msg in subwin.GetAllMessage()]
             return APIResponse(success=True, message='', data=result)
         else:
             return APIResponse(success=False, message='找不到该聊天窗口')
-        
+
     def get_new_message(
             self,
             who: str,
@@ -91,7 +91,7 @@ class ChatService:
         subwin = get_wechat_subwin(wxname, who)
         if subwin:
             result = subwin.ChatInfo()
-            result['msg'] = [msg.info for msg in subwin.GetNewMessage()]
+            result['msg'] = [msg.raw for msg in subwin.GetNewMessage()]
             return APIResponse(success=True, message='', data=result)
         else:
             return APIResponse(success=False, message='找不到该聊天窗口')
