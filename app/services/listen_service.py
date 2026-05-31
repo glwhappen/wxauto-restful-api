@@ -5,24 +5,28 @@
 import asyncio
 import json
 import logging
+from collections import defaultdict, deque
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Any, Callable
-from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional, Set
+
 from fastapi import WebSocket
 from pydantic import BaseModel
 
 from app.models.response import APIResponse
-from app.services.wechat_service import get_wechat, check_wechat_alive
 from app.services.init import WeChat
+from app.services.wechat_service import check_wechat_alive, get_wechat
 
 # 配置日志
 logger = logging.getLogger(__name__)
 
-# 安全白名单
-SAFE_CONTACTS: Set[str] = {"文件传输助手", "Kim", "Cluic"}
+# 安全白名单（空集合 = 不限制）
+SAFE_CONTACTS: Set[str] = set()
 
-# 沙箱模式（生产环境可设置为False）
-SANDBOX_MODE: bool = True
+# 沙箱模式：True 时只允许监听白名单联系人；白名单为空时沙箱模式自动无效
+SANDBOX_MODE: bool = False
+
+# HTTP 轮询消息队列（最多保留 500 条）
+_http_message_queue: deque = deque(maxlen=500)
 
 
 class ListenMessage(BaseModel):
@@ -159,16 +163,24 @@ class ListenService:
         def on_message(msg, chat):
             """处理接收到的消息"""
             try:
-                # 构造消息数据
+                raw = msg.raw if hasattr(msg, 'raw') else {}
                 message_data = {
                     "type": "message",
-                    "data": msg.raw
+                    "data": {**raw, "listen_who": who, "received_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
                 }
 
-                logger.info(f"收到来自 {who} 的消息: {message_data['data']['content']}")
+                logger.info(f"收到来自 {who} 的消息: {raw.get('content', '')}")
 
-                # 异步广播给所有监听该联系人的客户端
-                asyncio.create_task(manager.broadcast_to_listeners(who, message_data))
+                # 存入 HTTP 轮询队列
+                _http_message_queue.appendleft(message_data["data"])
+
+                # 广播给所有 WebSocket 监听该联系人的客户端
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(manager.broadcast_to_listeners(who, message_data))
+                except Exception:
+                    pass
 
             except Exception as e:
                 logger.error(f"处理消息回调时出错: {e}")
@@ -176,7 +188,9 @@ class ListenService:
         return on_message
 
     def is_safe_contact(self, who: str) -> bool:
-        """检查联系人是否安全"""
+        """检查联系人是否安全（白名单为空时不限制）"""
+        if not SAFE_CONTACTS:
+            return True
         return who in SAFE_CONTACTS
 
     def start_listen(
@@ -341,5 +355,20 @@ class ListenService:
         )
 
 
+def get_http_messages(limit: int = 100) -> List[dict]:
+    """获取 HTTP 轮询消息队列中的消息（最新在前）"""
+    return list(_http_message_queue)[:limit]
+
+
+def clear_http_messages() -> int:
+    """清空 HTTP 轮询消息队列，返回清除条数"""
+    count = len(_http_message_queue)
+    _http_message_queue.clear()
+    return count
+
+
 # 导出管理器和服务实例
-__all__ = ['ListenService', 'manager', 'SAFE_CONTACTS', 'SANDBOX_MODE']
+__all__ = [
+    'ListenService', 'manager', 'SAFE_CONTACTS', 'SANDBOX_MODE',
+    'get_http_messages', 'clear_http_messages',
+]

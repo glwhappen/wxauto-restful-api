@@ -164,7 +164,7 @@ app.include_router(wechat.router, prefix=f"{settings.api.prefix}/wechat", tags=[
 # app.include_router(apps.router, prefix=f"{settings.api.prefix}/apps", tags=["Apps"], dependencies=[Depends(get_current_token)])
 app.include_router(files.router, prefix=f"{settings.api.prefix}/files", tags=["files"])
 app.include_router(info.router, prefix=f"{settings.api.prefix}/info", tags=["Info"])
-# app.include_router(listen.router, prefix=f"{settings.api.prefix}/listen", tags=["Listen"])
+app.include_router(listen.router, prefix=f"{settings.api.prefix}/listen", tags=["Listen"], dependencies=[Depends(get_current_token)])
 # 激活相关接口无需认证
 app.include_router(activation.router, prefix=f"{settings.api.prefix}/activation", tags=["Activation"])
 
