@@ -7,6 +7,9 @@ class SessionConfigRequest(BaseModel):
     max_sessions: Optional[int] = Field(None, ge=1, le=50, description="最大同时子窗口数量（1-50）")
     poll_interval_seconds: Optional[int] = Field(None, ge=1, le=30, description="轮询间隔秒数（1-30）")
     filter_mute: Optional[bool] = Field(None, description="是否忽略免打扰消息")
+    listen_friends: Optional[bool] = Field(None, description="是否自动监听好友消息（默认 true）")
+    listen_groups: Optional[bool] = Field(None, description="是否自动监听群消息（默认 true）")
+    only_at_in_groups: Optional[bool] = Field(None, description="群消息仅在 @自己 时才激活（默认 false）")
     wxname: Optional[str] = Field(None, description="微信实例名，单开留空")
 
 

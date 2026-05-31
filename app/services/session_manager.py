@@ -2,16 +2,31 @@
 智能会话管理器
 
 自动管理微信子窗口的生命周期：
-- 用户主动发来消息时自动开启子窗口并注册监听
+- 用户/群主动发来消息时自动开启子窗口并注册监听
 - 超过指定时间不活跃后自动关闭子窗口
 - 子窗口数量超过上限时关闭最久未活跃的
+- 可分别控制好友 / 群聊是否自动激活
 """
 import asyncio
 import logging
 import time
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+ChatType = Literal["friend", "group", "unknown"]
+
+
+class Session:
+    __slots__ = ("who", "chat_type", "last_active")
+
+    def __init__(self, who: str, chat_type: ChatType):
+        self.who = who
+        self.chat_type: ChatType = chat_type
+        self.last_active: float = time.time()
+
+    def touch(self):
+        self.last_active = time.time()
 
 
 class SessionManager:
@@ -27,26 +42,30 @@ class SessionManager:
             return
         self._initialized = True
 
-        # who -> 最后活跃时间戳
-        self.sessions: Dict[str, float] = {}
+        # who -> Session
+        self.sessions: Dict[str, Session] = {}
 
         self.config: Dict = {
             "enabled": False,
-            "timeout_minutes": 5,       # 不活跃多久后关闭
-            "max_sessions": 10,         # 最多同时保留几个子窗口
-            "poll_interval_seconds": 2, # 主动轮询间隔
-            "filter_mute": False,       # 是否忽略免打扰消息
-            "wxname": "",               # 微信实例名
+            "timeout_minutes": 5,        # 不活跃多久后关闭
+            "max_sessions": 10,          # 最多同时保留几个子窗口
+            "poll_interval_seconds": 2,  # 主动轮询间隔
+            "filter_mute": False,        # 是否忽略免打扰消息
+            "listen_friends": True,      # 是否自动监听好友消息
+            "listen_groups": True,       # 是否自动监听群消息
+            "only_at_in_groups": False,  # 群消息只在 @自己 时才激活
+            "wxname": "",                # 微信实例名（多开时用）
         }
 
         self._task: Optional[asyncio.Task] = None
+        # 缓存自己的微信名，用于 @检测
+        self._my_name: Optional[str] = None
 
     # ------------------------------------------------------------------ #
-    # 控制接口                                                             #
+    # 控制接口                                                              #
     # ------------------------------------------------------------------ #
 
     def start(self) -> bool:
-        """启动会话管理器，返回是否成功启动（已运行则返回 False）"""
         if self._task and not self._task.done():
             return False
         self.config["enabled"] = True
@@ -55,7 +74,6 @@ class SessionManager:
         return True
 
     def stop(self):
-        """停止会话管理器"""
         self.config["enabled"] = False
         if self._task:
             self._task.cancel()
@@ -74,33 +92,41 @@ class SessionManager:
         timeout_secs = self.config["timeout_minutes"] * 60
         sessions_info = [
             {
-                "who": who,
-                "last_active": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
-                "idle_seconds": int(now - ts),
-                "will_close_in": max(0, int(timeout_secs - (now - ts))),
+                "who": s.who,
+                "chat_type": s.chat_type,
+                "last_active": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(s.last_active)),
+                "idle_seconds": int(now - s.last_active),
+                "will_close_in": max(0, int(timeout_secs - (now - s.last_active))),
             }
-            for who, ts in sorted(self.sessions.items(), key=lambda x: -x[1])
+            for s in sorted(self.sessions.values(), key=lambda x: -x.last_active)
         ]
+        friends = sum(1 for s in self.sessions.values() if s.chat_type == "friend")
+        groups = sum(1 for s in self.sessions.values() if s.chat_type == "group")
         return {
             "running": self.running(),
             "config": self.config,
             "session_count": len(self.sessions),
+            "friend_sessions": friends,
+            "group_sessions": groups,
             "sessions": sessions_info,
         }
 
     # ------------------------------------------------------------------ #
-    # 会话操作                                                             #
+    # 会话操作                                                              #
     # ------------------------------------------------------------------ #
 
-    def touch(self, who: str):
-        """更新联系人的最后活跃时间"""
-        self.sessions[who] = time.time()
+    def touch(self, who: str, chat_type: ChatType = "unknown"):
+        if who in self.sessions:
+            self.sessions[who].touch()
+            if chat_type != "unknown":
+                self.sessions[who].chat_type = chat_type
+        else:
+            self.sessions[who] = Session(who, chat_type)
 
     async def _ensure_listening(self, who: str):
-        """如果该联系人还没有子窗口，自动开启"""
         from app.services.listen_service import manager as ws_manager
         if who in ws_manager.callbacks:
-            return  # 已在监听
+            return
         try:
             from app.services.listen_service import ListenService
             result = ListenService().start_listen(who=who, wxname=self.config["wxname"] or None)
@@ -112,7 +138,6 @@ class SessionManager:
             logger.error(f"[SessionManager] 开启监听异常 {who}: {e}")
 
     async def _close_session(self, who: str):
-        """关闭指定联系人的监听和子窗口"""
         try:
             from app.services.listen_service import ListenService
             ListenService().stop_listen(who=who, wxname=self.config["wxname"] or None)
@@ -128,6 +153,7 @@ class SessionManager:
     async def _run(self):
         from app.services.wechat_service import WeChatService
         wx_service = WeChatService()
+        await self._fetch_my_name(wx_service)
 
         while self.config["enabled"]:
             try:
@@ -142,8 +168,17 @@ class SessionManager:
 
         logger.info("SessionManager loop exited")
 
+    async def _fetch_my_name(self, wx_service):
+        """启动时获取自己的微信名，用于群 @ 检测"""
+        try:
+            result = await wx_service.get_my_info()
+            if result.success and result.data:
+                self._my_name = result.data.get("item", {}).get("display_name", "")
+                logger.info(f"[SessionManager] 我的微信名: {self._my_name}")
+        except Exception as e:
+            logger.warning(f"[SessionManager] 获取自己信息失败: {e}")
+
     async def _poll_and_activate(self, wx_service):
-        """轮询一次新消息，如有好友发言则激活其会话"""
         result = await wx_service.get_next_new_message(
             filter_mute=self.config["filter_mute"],
             wxname=self.config["wxname"] or None,
@@ -154,20 +189,38 @@ class SessionManager:
         chat_info = result.data.get("chat_info", {})
         messages = result.data.get("messages", [])
         who = chat_info.get("chat_name", "")
+        chat_type: ChatType = chat_info.get("chat_type", "unknown")  # "friend" / "group"
 
         if not who:
             return
 
-        has_incoming = any(m.get("src") == "friend" for m in messages)
-        if not has_incoming:
+        incoming = [m for m in messages if m.get("src") == "friend"]
+        if not incoming:
             return
 
-        logger.info(f"[SessionManager] 检测到 {who} 新消息，激活会话")
-        self.touch(who)
+        # 根据类型决定是否激活
+        if chat_type == "friend" and not self.config["listen_friends"]:
+            return
+        if chat_type == "group" and not self.config["listen_groups"]:
+            return
+
+        # 群聊：only_at_in_groups 开启时，只在消息含 @ 自己时激活
+        if chat_type == "group" and self.config["only_at_in_groups"]:
+            my_name = self._my_name or ""
+            mentioned = any(
+                (f"@{my_name}" in (m.get("content") or "") or
+                 my_name in (m.get("at_list") or []))
+                for m in incoming
+            )
+            if not mentioned:
+                return
+
+        type_label = "好友" if chat_type == "friend" else "群"
+        logger.info(f"[SessionManager] 检测到{type_label}消息: {who}，激活会话")
+        self.touch(who, chat_type)
         await self._ensure_listening(who)
 
     async def _cleanup(self):
-        """关闭超时会话 & 超量会话"""
         if not self.sessions:
             return
 
@@ -175,24 +228,21 @@ class SessionManager:
         timeout_secs = self.config["timeout_minutes"] * 60
         max_s = self.config["max_sessions"]
 
-        # 按最后活跃时间排序（最旧在前）
-        ordered = sorted(self.sessions.items(), key=lambda x: x[1])
+        ordered = sorted(self.sessions.values(), key=lambda s: s.last_active)
+        to_close: set = set()
 
-        to_close = set()
+        for s in ordered:
+            if now - s.last_active > timeout_secs:
+                to_close.add(s.who)
 
-        # 超时
-        for who, ts in ordered:
-            if now - ts > timeout_secs:
-                to_close.add(who)
-
-        # 超量（从最旧的开始关）
-        active = [w for w, _ in ordered if w not in to_close]
+        active = [s.who for s in ordered if s.who not in to_close]
         if len(active) > max_s:
             for who in active[: len(active) - max_s]:
                 to_close.add(who)
 
         for who in to_close:
-            logger.info(f"[SessionManager] 自动关闭会话: {who}（超时或超量）")
+            chat_type = self.sessions[who].chat_type if who in self.sessions else "?"
+            logger.info(f"[SessionManager] 自动关闭会话: {who}（{chat_type}，超时或超量）")
             await self._close_session(who)
 
 
