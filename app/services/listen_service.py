@@ -168,11 +168,6 @@ class ListenService:
             """处理接收到的消息"""
             try:
                 raw = msg.raw if hasattr(msg, 'raw') else {}
-
-                # 过滤自己发出的消息，只保留对方发来的
-                if raw.get('src') == 'self' or raw.get('attr') == 'self':
-                    return
-
                 message_data = {
                     "type": "message",
                     "data": {**raw, "listen_who": who, "received_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
