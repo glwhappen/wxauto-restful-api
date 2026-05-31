@@ -508,17 +508,11 @@ class WeChatService:
             who: str,
             wxname: Optional[str] = None
     ) -> APIResponse:
-        """添加监听聊天"""
+        """添加监听聊天（打开子窗口并注册消息回调）"""
         @handle_service_error(custom_message="添加监听失败")
         def _add_listen():
-            wx = get_wechat(wxname)
-            if who in [i.who for i in wx.GetAllSubWindow()]:
-                return APIResponse(success=False, message='该聊天已监听中')
-            wxapi = wx._api if hasattr(wx, '_api') else wx.core
-            subwin = wxapi.open_separate_window(who)
-            if subwin is None:
-                return APIResponse(success=False, message='找不到聊天窗口')
-            return APIResponse(success=True, message=f'{who} 聊天窗口已添加监听')
+            from app.services.listen_service import ListenService
+            return ListenService().start_listen(who=who, wxname=wxname)
 
         return await self._queue.submit(_add_listen)
 
@@ -529,14 +523,8 @@ class WeChatService:
             wxname: Optional[str] = None
     ) -> APIResponse:
         """添加监听聊天（同步接口）"""
-        wx = get_wechat(wxname)
-        if who in [i.who for i in wx.GetAllSubWindow()]:
-            return APIResponse(success=False, message='该聊天已监听中')
-        wxapi = wx._api if hasattr(wx, '_api') else wx.core
-        subwin = wxapi.open_separate_window(who)
-        if subwin is None:
-            return APIResponse(success=False, message='找不到聊天窗口')
-        return APIResponse(success=True, message=f'{who} 聊天窗口已添加监听')
+        from app.services.listen_service import ListenService
+        return ListenService().start_listen(who=who, wxname=wxname)
 
     async def get_next_new_message(
             self,
@@ -848,10 +836,8 @@ class WeChatService:
         """移除监听聊天"""
         @handle_service_error(custom_message="移除监听失败")
         def _remove_listen():
-            wx = get_wechat(wxname)
-            result = wx.RemoveListenChat(nickname=who)
-            message = result.get('message') or '操作成功'
-            return APIResponse(success=bool(result), message=message, data=result.get('data'))
+            from app.services.listen_service import ListenService
+            return ListenService().stop_listen(who=who, wxname=wxname)
 
         return await self._queue.submit(_remove_listen)
 
@@ -862,10 +848,8 @@ class WeChatService:
             wxname: Optional[str] = None
     ) -> APIResponse:
         """移除监听聊天（同步接口）"""
-        wx = get_wechat(wxname)
-        result = wx.RemoveListenChat(nickname=who)
-        message = result.get('message') or '操作成功'
-        return APIResponse(success=bool(result), message=message, data=result.get('data'))
+        from app.services.listen_service import ListenService
+        return ListenService().stop_listen(who=who, wxname=wxname)
 
     # 新增：获取历史消息
     async def get_history_message(
@@ -1155,6 +1139,49 @@ class WeChatService:
         result = wx.PublishMoment(text=text, media_files=media_files, privacy_config=privacy_config)
         message = result.get('message') or '操作成功'
         return APIResponse(success=bool(result), message=message, data=result.get('data'))
+
+    async def get_chat_info(
+            self,
+            wxname: Optional[str] = None
+    ) -> APIResponse:
+        """获取当前聊天窗口信息"""
+        @handle_service_error(custom_message="获取聊天信息失败")
+        def _get_info():
+            from app.utils.response_builder import single_object
+            wx = get_wechat(wxname)
+            result = wx.ChatInfo()
+            return single_object(obj=result, message="")
+
+        return await self._queue.submit(_get_info)
+
+    async def batch_send_message(
+            self,
+            targets: List[str],
+            msg: str,
+            at: Optional[Union[str, List[str]]] = None,
+            clear: bool = True,
+            wxname: Optional[str] = None
+    ) -> APIResponse:
+        """批量发送消息给多个联系人"""
+        @handle_service_error(custom_message="批量发送失败")
+        def _batch_send():
+            wx = get_wechat(wxname)
+            results = {"success": [], "failed": []}
+            for target in targets:
+                ok = safe_send_msg(wx, target=target, msg=msg, at=at, clear=clear)
+                if ok:
+                    results["success"].append(target)
+                else:
+                    results["failed"].append(target)
+            total = len(targets)
+            ok_count = len(results["success"])
+            return APIResponse(
+                success=len(results["failed"]) == 0,
+                message=f"批量发送完成: {ok_count}/{total} 成功",
+                data=results,
+            )
+
+        return await self._queue.submit(_batch_send)
 
     async def close(self):
         """关闭服务并清理资源"""

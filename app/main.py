@@ -160,7 +160,7 @@ async def root():
 
 # 注册路由，添加认证依赖
 app.include_router(wechat.router, prefix=f"{settings.api.prefix}/wechat", tags=["WeChat"], dependencies=[Depends(get_current_token)])
-# app.include_router(chat.router, prefix=f"{settings.api.prefix}/chat", tags=["Chat"], dependencies=[Depends(get_current_token)])
+app.include_router(chat.router, prefix=f"{settings.api.prefix}/chat", tags=["Chat"], dependencies=[Depends(get_current_token)])
 # app.include_router(apps.router, prefix=f"{settings.api.prefix}/apps", tags=["Apps"], dependencies=[Depends(get_current_token)])
 app.include_router(files.router, prefix=f"{settings.api.prefix}/files", tags=["files"])
 app.include_router(info.router, prefix=f"{settings.api.prefix}/info", tags=["Info"])

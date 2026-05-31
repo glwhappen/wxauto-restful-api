@@ -115,18 +115,29 @@ async def get_config():
     summary="获取监听收到的消息（HTTP 轮询）"
 )
 async def get_messages(
-    limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
+    limit: int = Query(20, ge=1, le=500, description="返回条数上限"),
+    offset: int = Query(0, ge=0, description="跳过前 N 条（游标分页，用于只取新消息）"),
 ):
     """获取通过 AddListenChat 监听收到的消息队列（最新在前）。
 
-    适用于不方便使用 WebSocket 的场景，可定期轮询此接口获取新消息。
+    **轮询建议**：记录上次返回的条数作为下次的 offset，即可只获取增量新消息。
+
+    示例：首次 `offset=0&limit=20`，若返回 5 条，下次用 `offset=5&limit=20`。
     消息在队列中最多保留 500 条，先进先出滚动。
     """
-    messages = get_http_messages(limit)
+    all_messages = get_http_messages(500)
+    total = len(all_messages)
+    page = all_messages[offset: offset + limit]
     return APIResponse(
         success=True,
         message="",
-        data={"total": len(messages), "items": messages},
+        data={
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + limit < total,
+            "items": page,
+        },
     )
 
 

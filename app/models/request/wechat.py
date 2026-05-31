@@ -115,3 +115,10 @@ class PublishMomentRequest(BaseRequest):
 # 进入朋友圈请求
 class MomentsRequest(BaseRequest):
     timeout: int = 3
+
+# 批量发送消息请求
+class BatchSendMessageRequest(BaseRequest):
+    targets: List[str]
+    msg: str
+    at: Union[str, List[str]] = ''
+    clear: bool = True

@@ -469,6 +469,40 @@ async def switch_to_contact_page(
     return await service.switch_to_contact_page(wxname=request.wxname)
 
 @router.post(
+    "/chatinfo",
+    operation_id="[wx]获取当前聊天窗口信息",
+    response_model=APIResponse,
+    summary="获取当前聊天窗口信息（chat_name、chat_type 等）"
+)
+async def get_chat_info(
+    request: GetSessionRequest,
+    service: WeChatService = Depends()
+):
+    """获取主窗口当前聊天窗口的详细信息"""
+    return await service.get_chat_info(wxname=request.wxname)
+
+
+@router.post(
+    "/batch/send",
+    operation_id="[wx]批量发送消息",
+    response_model=APIResponse,
+    summary="批量发送相同消息给多个联系人"
+)
+async def batch_send_message(
+    request: BatchSendMessageRequest,
+    service: WeChatService = Depends()
+):
+    """依次向多个联系人发送相同的消息，返回成功/失败列表"""
+    return await service.batch_send_message(
+        targets=request.targets,
+        msg=request.msg,
+        at=request.at,
+        clear=request.clear,
+        wxname=request.wxname,
+    )
+
+
+@router.post(
     "/moments",
     operation_id="[wx]进入朋友圈",
     response_model=APIResponse,
