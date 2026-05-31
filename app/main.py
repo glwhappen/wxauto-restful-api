@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api.v1 import wechat, chat, apps, files, info, listen, activation
+from app.api.v1 import wechat, chat, apps, files, info, listen, activation, session
 from app.utils.auth import get_current_token
 from app.models.response import APIResponse
 from app.utils.config import settings
@@ -165,6 +165,7 @@ app.include_router(chat.router, prefix=f"{settings.api.prefix}/chat", tags=["Cha
 app.include_router(files.router, prefix=f"{settings.api.prefix}/files", tags=["files"])
 app.include_router(info.router, prefix=f"{settings.api.prefix}/info", tags=["Info"])
 app.include_router(listen.router, prefix=f"{settings.api.prefix}/listen", tags=["Listen"], dependencies=[Depends(get_current_token)])
+app.include_router(session.router, prefix=f"{settings.api.prefix}/session", tags=["Session"], dependencies=[Depends(get_current_token)])
 # 激活相关接口无需认证
 app.include_router(activation.router, prefix=f"{settings.api.prefix}/activation", tags=["Activation"])
 
