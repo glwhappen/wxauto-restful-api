@@ -8,9 +8,10 @@
 - 可分别控制好友 / 群聊是否自动激活
 """
 import asyncio
+import concurrent.futures
 import logging
 import time
-from typing import Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ class SessionManager:
         }
 
         self._task: Optional[asyncio.Task] = None
+        # 独立线程池，Session Manager 的 wx 轮询不走主操作队列
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="session_mgr"
+        )
         # 缓存自己的微信名，用于 @检测
         self._my_name: Optional[str] = None
 
@@ -167,13 +172,13 @@ class SessionManager:
     # ------------------------------------------------------------------ #
 
     async def _run(self):
-        from app.services.wechat_service import WeChatService
-        wx_service = WeChatService()
-        await self._fetch_my_name(wx_service)
+        loop = asyncio.get_event_loop()
+        # 启动时获取自己的微信名（走独立线程）
+        await loop.run_in_executor(self._executor, self._fetch_my_name_sync)
 
         while self.config["enabled"]:
             try:
-                await self._poll_and_activate(wx_service)
+                await self._poll_and_activate(loop)
                 await self._cleanup()
             except asyncio.CancelledError:
                 break
@@ -184,28 +189,48 @@ class SessionManager:
 
         logger.info("SessionManager loop exited")
 
-    async def _fetch_my_name(self, wx_service):
-        """启动时获取自己的微信名，用于群 @ 检测"""
+    def _fetch_my_name_sync(self):
+        """获取自己的微信名（直接调 wx，不走主操作队列）"""
         try:
-            result = await wx_service.get_my_info()
-            if result.success and result.data:
-                self._my_name = result.data.get("item", {}).get("display_name", "")
-                logger.info(f"[SessionManager] 我的微信名: {self._my_name}")
+            from app.services.init import WxClient
+            if not WxClient:
+                return
+            wx = next(iter(WxClient.values()))
+            info = wx.GetMyInfo()
+            self._my_name = info.get("display_name", "") if isinstance(info, dict) else ""
+            logger.info(f"[SessionManager] 我的微信名: {self._my_name}")
         except Exception as e:
             logger.warning(f"[SessionManager] 获取自己信息失败: {e}")
 
-    async def _poll_and_activate(self, wx_service):
-        result = await wx_service.get_next_new_message(
-            filter_mute=self.config["filter_mute"],
-            wxname=self.config["wxname"] or None,
-        )
-        if not result.success or not result.data:
+    def _poll_wx_sync(self) -> Optional[dict]:
+        """直接调 wx 轮询新消息，不走主操作队列，避免占用操作锁"""
+        try:
+            from app.services.init import WxClient
+            from app.services.wechat_service import get_raw_messages
+            if not WxClient:
+                return None
+            wx = next(iter(WxClient.values()))
+            wxname = self.config.get("wxname", "")
+            if wxname and wxname in WxClient:
+                wx = WxClient[wxname]
+            next_msgs = wx.GetNextNewMessage(filter_mute=self.config["filter_mute"])
+            chat_info = wx.ChatInfo()
+            msgs = next_msgs.get("msg", []) if isinstance(next_msgs, dict) else []
+            raw_msgs = get_raw_messages(msgs, chat_info)
+            return {"chat_info": chat_info, "messages": raw_msgs}
+        except Exception as e:
+            logger.debug(f"[SessionManager] 轮询异常（无消息时正常）: {e}")
+            return None
+
+    async def _poll_and_activate(self, loop: asyncio.AbstractEventLoop):
+        data = await loop.run_in_executor(self._executor, self._poll_wx_sync)
+        if not data:
             return
 
-        chat_info = result.data.get("chat_info", {})
-        messages = result.data.get("messages", [])
+        chat_info = data.get("chat_info", {})
+        messages = data.get("messages", [])
         who = chat_info.get("chat_name", "")
-        chat_type: ChatType = chat_info.get("chat_type", "unknown")  # "friend" / "group"
+        chat_type: ChatType = chat_info.get("chat_type", "unknown")
 
         if not who:
             return
@@ -235,7 +260,7 @@ class SessionManager:
         logger.info(f"[SessionManager] 检测到{type_label}消息: {who}，激活会话")
         self.touch(who, chat_type)
 
-        # 将触发激活的消息手动推入 HTTP 队列（子窗口尚未开启时回调不会触发）
+        # 将触发激活的消息补推入 HTTP 队列（子窗口尚未开启，回调不会触发）
         self._push_to_queue(who, chat_type, messages)
 
         await self._ensure_listening(who)
