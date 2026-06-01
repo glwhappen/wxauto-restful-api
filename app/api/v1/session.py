@@ -72,6 +72,9 @@ async def update_config(request: SessionConfigRequest):
     | max_sessions | 最多同时保留几个子窗口 | 10 |
     | poll_interval_seconds | 轮询新消息的间隔（秒）| 2 |
     | filter_mute | 是否忽略免打扰会话 | false |
+    | listen_friends | 是否自动监听好友消息 | true |
+    | listen_groups | 是否自动监听群消息 | true |
+    | only_at_in_groups | 群消息仅在 @自己 时才激活 | false |
     """
     updates = {k: v for k, v in request.model_dump().items() if v is not None}
     session_manager.update_config(**updates)
@@ -88,7 +91,8 @@ async def activate_session(request: SessionActivateRequest):
     """手动为指定联系人打开子窗口并重置活跃计时器。
     适用于机器人主动发起对话、或提前预热某个重要联系人的会话。
     """
-    session_manager.touch(request.who)
+    chat_type = request.chat_type or "unknown"
+    session_manager.touch(request.who, chat_type)
     await session_manager._ensure_listening(request.who)
     return APIResponse(
         success=True,

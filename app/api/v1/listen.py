@@ -117,15 +117,29 @@ async def get_config():
 async def get_messages(
     limit: int = Query(20, ge=1, le=500, description="返回条数上限"),
     offset: int = Query(0, ge=0, description="跳过前 N 条（游标分页，用于只取新消息）"),
+    who: Optional[str] = Query(None, description="只返回指定联系人/群的消息"),
+    src: Optional[str] = Query(None, description="按来源过滤：friend / self / system"),
+    chat_type: Optional[str] = Query(None, description="按类型过滤：friend / group"),
 ):
-    """获取通过 AddListenChat 监听收到的消息队列（最新在前）。
+    """获取监听消息队列（最新在前）。
 
-    **轮询建议**：记录上次返回的条数作为下次的 offset，即可只获取增量新消息。
+    **游标轮询**：记录上次 total，下次传入 offset=上次total，只取新增消息。
 
-    示例：首次 `offset=0&limit=20`，若返回 5 条，下次用 `offset=5&limit=20`。
-    消息在队列中最多保留 500 条，先进先出滚动。
+    **过滤参数**：
+    - `who` — 只看某个联系人/群的消息
+    - `src` — `friend`（对方发）/ `self`（自己发）/ `system`（系统）
+    - `chat_type` — `friend`（好友私聊）/ `group`（群聊）
     """
     all_messages = get_http_messages(500)
+
+    # 应用过滤
+    if who:
+        all_messages = [m for m in all_messages if m.get("listen_who") == who or m.get("chat_name") == who]
+    if src:
+        all_messages = [m for m in all_messages if m.get("src") == src]
+    if chat_type:
+        all_messages = [m for m in all_messages if m.get("chat_type") == chat_type]
+
     total = len(all_messages)
     page = all_messages[offset: offset + limit]
     return APIResponse(

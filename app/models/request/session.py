@@ -15,4 +15,5 @@ class SessionConfigRequest(BaseModel):
 
 class SessionActivateRequest(BaseModel):
     who: str = Field(..., description="手动激活指定联系人的会话")
+    chat_type: Optional[str] = Field(None, description="会话类型：friend / group，不传则自动识别")
     wxname: Optional[str] = Field(None, description="微信实例名，单开留空")

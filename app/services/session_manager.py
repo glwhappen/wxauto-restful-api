@@ -137,6 +137,22 @@ class SessionManager:
         except Exception as e:
             logger.error(f"[SessionManager] 开启监听异常 {who}: {e}")
 
+    def _push_to_queue(self, who: str, chat_type: ChatType, messages: list):
+        """将 getnextnewmessage 拿到的消息补推进 HTTP 队列"""
+        from app.services.listen_service import _http_message_queue
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        for m in messages:
+            if not isinstance(m, dict) or m.get("type") == "time":
+                continue
+            entry = {
+                **m,
+                "chat_name": who,
+                "chat_type": chat_type,
+                "listen_who": who,
+                "received_at": now,
+            }
+            _http_message_queue.appendleft(entry)
+
     async def _close_session(self, who: str):
         try:
             from app.services.listen_service import ListenService
@@ -218,6 +234,10 @@ class SessionManager:
         type_label = "好友" if chat_type == "friend" else "群"
         logger.info(f"[SessionManager] 检测到{type_label}消息: {who}，激活会话")
         self.touch(who, chat_type)
+
+        # 将触发激活的消息手动推入 HTTP 队列（子窗口尚未开启时回调不会触发）
+        self._push_to_queue(who, chat_type, messages)
+
         await self._ensure_listening(who)
 
     async def _cleanup(self):
